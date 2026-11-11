@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIM-Warta</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="config.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+    header { background: #1a56db; color: #fff; padding: 12px 16px; display: flex; justify-content: space-between; }
+    header button { background: transparent; color: #fff; border: 1px solid #fff; border-radius: 6px; }
+    nav { display: flex; gap: 8px; padding: 8px 16px; background: #fff; overflow-x: auto; }
+    nav button { border: 0; background: #e8eefc; padding: 8px 12px; border-radius: 6px; }
+    nav button.on { background: #1a56db; color: #fff; }
+    main { padding: 16px; }
+    .card { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+    input, select { padding: 8px; margin: 4px 0; width: 100%; box-sizing: border-box; }
+    .err { color: #b00020; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    td, th { text-align: left; padding: 6px; border-bottom: 1px solid #eee; }
+    #login { text-align: center; margin-top: 60px; }
+  </style>
+</head>
+<body>
+  <header><b>SIM-Warta</b> <span><span id="who"></span> <button id="out" hidden>Keluar</button></span></header>
+  <div id="login">
+    <p>Masuk dengan akun Google yang terdaftar.</p>
+    <div id="gbtn" style="display:inline-block"></div>
+    <p id="loginErr" class="err"></p>
+  </div>
+  <nav id="menu" hidden></nav>
+  <main id="view" hidden></main>
+
+  <script>
+    var TOKEN_KEY = 'simwarta_token';
+    var state = { token: null, session: null };
+
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+    function $(id) { return document.getElementById(id); }
+
+    function tokenExp(t) {
+      try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; }
+      catch (e) { return 0; }
+    }
+
+    /** Panggil API Apps Script. text/plain menghindari preflight CORS. */
+    function api(action, params) {
+      return fetch(CONFIG.API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ idToken: state.token, action: action, params: params || {} })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (!j.ok) throw new Error(j.error);
+        return j.data;
+      });
+    }
+
+    function logout() {
+      sessionStorage.removeItem(TOKEN_KEY);
+      state = { token: null, session: null };
+      location.reload();
+    }
+    $('out').onclick = logout;
+
+    function onCredential(resp) { start(resp.credential); }
+
+    function start(token) {
+      state.token = token;
+      api('session').then(function (s) {
+        sessionStorage.setItem(TOKEN_KEY, token);
+        state.session = s;
+        $('login').hidden = true;
+        $('menu').hidden = false; $('view').hidden = false; $('out').hidden = false;
+        $('who').textContent = s.user.nama + ' (' + s.user.peran + ') ';
+        $('menu').innerHTML = s.menu.map(function (m) {
+          return '<button data-id="' + m.id + '">' + esc(m.label) + '</button>'; }).join('');
+        $('menu').onclick = function (e) { if (e.target.dataset.id) show(e.target.dataset.id); };
+        show('beranda');
+      }).catch(function (e) {
+        sessionStorage.removeItem(TOKEN_KEY);
+        $('loginErr').textContent = e.message;
+      });
+    }
+
+    window.onload = function () {
+      var saved = sessionStorage.getItem(TOKEN_KEY);
+      if (saved && tokenExp(saved) > Date.now() + 60000) return start(saved);
+      var iv = setInterval(function () {
+        if (!window.google || !google.accounts) return;
+        clearInterval(iv);
+        google.accounts.id.initialize({ client_id: CONFIG.CLIENT_ID, callback: onCredential });
+        google.accounts.id.renderButton($('gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with' });
+      }, 200);
+    };
+
+    function show(id) {
+      Array.prototype.forEach.call(document.querySelectorAll('nav button'), function (b) {
+        b.className = b.dataset.id === id ? 'on' : ''; });
+      if (id === 'pengguna') return viewUsers();
+      $('view').innerHTML = '<div class="card">Selamat datang, ' + esc(state.session.user.nama) +
+        '. Fitur pengajuan hadir di Tahap 2.</div>';
+    }
+
+    function renderUsers(list) {
+      var rows = list.map(function (u) {
+        return '<tr><td>' + esc(u.email) + '</td><td>' + esc(u.nama) + '</td><td>' + esc(u.peran) +
+          '</td><td>' + esc(u.aktif) + '</td></tr>'; }).join('');
+      $('list').innerHTML = '<table><tr><th>Email</th><th>Nama</th><th>Peran</th><th>Aktif</th></tr>' + rows + '</table>';
+    }
+
+    function viewUsers() {
+      $('view').innerHTML =
+        '<div class="card"><b>Tambah / ubah pengguna</b>' +
+        '<input id="e" placeholder="Email Google"><input id="n" placeholder="Nama"><input id="u" placeholder="Unit">' +
+        '<select id="p"><option>petugas</option><option>admin</option></select>' +
+        '<select id="a"><option value="ya">Aktif</option><option value="tidak">Nonaktif</option></select>' +
+        '<button id="save">Simpan</button> <span id="msg" class="err"></span></div>' +
+        '<div class="card" id="list">Memuat...</div>';
+      api('listUsers').then(renderUsers).catch(function (e) { $('list').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; });
+      $('save').onclick = function () {
+        $('msg').textContent = '';
+        api('saveUser', { email: $('e').value, nama: $('n').value, unit: $('u').value,
+          peran: $('p').value, aktif: $('a').value })
+          .then(renderUsers).catch(function (e) { $('msg').textContent = e.message; });
+      };
+    }
+  </script>
+</body>
+</html>
+
